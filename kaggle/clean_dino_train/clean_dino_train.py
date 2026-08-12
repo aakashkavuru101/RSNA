@@ -2,8 +2,8 @@
 
 The 58 expert-labelled studies are evaluation-only. They are never included in an
 optimizer batch. Supervision comes from the independently generated v4 report labels.
-The first published kernel is intentionally a bounded smoke run; set SMOKE = False only
-after its output and metrics have been inspected.
+The full configuration is enabled only after a bounded smoke run has validated the raw
+DICOM, label, model, checkpoint, and submission paths.
 """
 
 from __future__ import annotations
@@ -31,13 +31,15 @@ from sklearn.model_selection import GroupKFold
 
 T0 = time.time()
 SEED = 20260812
-SMOKE = True
+SMOKE = False
 SMOKE_NON_GOLD = 768
 EPOCHS = 2 if SMOKE else 8
 IMG_SIZE = 224
 CROP_MM = 130.0
 SLICE_BAND = (0.20, 0.80)
-N_SLICES = 3
+GROUP_SIZE = 3
+N_GROUPS = 1 if SMOKE else 2
+CACHE_SLICES = GROUP_SIZE * N_GROUPS
 BATCH_STUDIES = 6
 EVAL_BATCH = 8
 UNFREEZE_LAST = 4
@@ -340,7 +342,7 @@ def _read_slot(job: tuple[str, int, dict, str | None]) -> tuple[str, int, np.nda
     count = len(files)
     lo = int(SLICE_BAND[0] * (count - 1))
     hi = int(SLICE_BAND[1] * (count - 1))
-    indices = np.linspace(lo, max(lo, hi), N_SLICES).round().astype(int)
+    indices = np.linspace(lo, max(lo, hi), CACHE_SLICES).round().astype(int)
     images = []
     spacing = None
     for index in indices:
@@ -388,7 +390,9 @@ def _read_slot(job: tuple[str, int, dict, str | None]) -> tuple[str, int, np.nda
 def build_cache(slot_map: dict[str, list[dict | None]], sides: dict[str, str | None], tag: str):
     studies = sorted(slot_map)
     index = {study: i for i, study in enumerate(studies)}
-    cache = np.zeros((len(studies), len(SLOTS), N_SLICES, IMG_SIZE, IMG_SIZE), dtype=np.uint8)
+    cache = np.zeros(
+        (len(studies), len(SLOTS), CACHE_SLICES, IMG_SIZE, IMG_SIZE), dtype=np.uint8
+    )
     mask = np.zeros((len(studies), len(SLOTS)), dtype=np.float32)
     jobs = [
         (study, slot_index, record, sides.get(study))
@@ -480,18 +484,31 @@ def rank_predictions(predictions: np.ndarray) -> np.ndarray:
     return frame.rank(method="average", pct=True).values.astype(np.float32)
 
 
+def take_group(cache_rows: np.ndarray, group: int) -> np.ndarray:
+    """Take one interleaved three-slice view spanning the central slice band."""
+    output = cache_rows[:, :, group::N_GROUPS]
+    if output.shape[2] != GROUP_SIZE:
+        raise ValueError(f"Expected {GROUP_SIZE} channels, got {output.shape[2]}")
+    return output
+
+
 @torch.no_grad()
 def predict(model, cache, mask, indices, device) -> np.ndarray:
     model.eval()
-    outputs = []
-    for start in range(0, len(indices), EVAL_BATCH):
-        selected = indices[start:start + EVAL_BATCH]
-        images = torch.from_numpy(cache[selected]).to(device, non_blocking=True)
-        present = torch.from_numpy(mask[selected]).to(device, non_blocking=True)
-        with torch.autocast("cuda", enabled=device.type == "cuda"):
-            logits = model(images, present)
-        outputs.append(torch.sigmoid(logits).float().cpu().numpy())
-    return np.concatenate(outputs) if outputs else np.empty((0, len(TARGETS)), np.float32)
+    group_outputs = []
+    for group in range(N_GROUPS):
+        outputs = []
+        for start in range(0, len(indices), EVAL_BATCH):
+            selected = indices[start:start + EVAL_BATCH]
+            images = torch.from_numpy(take_group(cache[selected], group)).to(
+                device, non_blocking=True
+            )
+            present = torch.from_numpy(mask[selected]).to(device, non_blocking=True)
+            with torch.autocast("cuda", enabled=device.type == "cuda"):
+                logits = model(images, present)
+            outputs.append(torch.sigmoid(logits).float().cpu().numpy())
+        group_outputs.append(np.concatenate(outputs))
+    return np.mean(group_outputs, axis=0)
 
 
 def affine_augment(images: torch.Tensor) -> torch.Tensor:
@@ -516,7 +533,9 @@ def affine_augment(images: torch.Tensor) -> torch.Tensor:
     return (flat * gain + bias).clamp(0, 255).reshape(batch, slots, channels, height, width)
 
 
-def make_clean_split(studies: list[str], labels: pd.DataFrame, groups: dict[str, str]):
+def make_clean_split(
+    studies: list[str], labels: pd.DataFrame, groups: dict[str, str], fold_index: int = 0
+):
     table = labels.set_index("StudyInstanceUID").loc[studies]
     eligible = np.flatnonzero(~table["is_gold"].values)
     group_values = np.array([groups.get(study, "unknown") for study in studies])
@@ -525,7 +544,10 @@ def make_clean_split(studies: list[str], labels: pd.DataFrame, groups: dict[str,
         raise ValueError("Need at least two scanner groups for honest validation")
     folds = min(5, len(unique))
     splitter = GroupKFold(n_splits=folds)
-    train_local, val_local = next(splitter.split(eligible, groups=group_values[eligible]))
+    splits = list(splitter.split(eligible, groups=group_values[eligible]))
+    if not 0 <= fold_index < len(splits):
+        raise ValueError(f"fold_index {fold_index} is outside 0..{len(splits)-1}")
+    train_local, val_local = splits[fold_index]
     train_indices = eligible[train_local]
     val_indices = eligible[val_local]
 
@@ -540,10 +562,11 @@ def make_clean_split(studies: list[str], labels: pd.DataFrame, groups: dict[str,
     if set(group_values[train_indices]) & set(group_values[val_indices]):
         raise AssertionError("Scanner leakage between training and validation")
     log(
-        f"split: train={len(train_indices)}, val={len(val_indices)}, gold={len(gold_indices)}, "
+        f"fold {fold_index}: train={len(train_indices)}, val={len(val_indices)}, "
+        f"gold={len(gold_indices)}, "
         f"scanner train/val={len(set(group_values[train_indices]))}/{len(set(group_values[val_indices]))}"
     )
-    return table, train_indices, val_indices, gold_indices
+    return table, train_indices, val_indices, gold_indices, len(splits)
 
 
 def train_model(model, cache, mask, table, train_indices, val_indices, gold_indices, device):
@@ -576,7 +599,10 @@ def train_model(model, cache, mask, table, train_indices, val_indices, gold_indi
         losses = []
         for start in range(0, len(permutation) - BATCH_STUDIES + 1, BATCH_STUDIES):
             selected = permutation[start:start + BATCH_STUDIES]
-            images = torch.from_numpy(cache[selected]).to(device, non_blocking=True)
+            group = int(np.random.randint(N_GROUPS))
+            images = torch.from_numpy(take_group(cache[selected], group)).to(
+                device, non_blocking=True
+            )
             images = affine_augment(images)
             present = torch.from_numpy(mask[selected]).to(device, non_blocking=True)
             truth = torch.from_numpy(targets[selected]).to(device, non_blocking=True)
@@ -652,38 +678,6 @@ def main() -> None:
     groups = scanner_groups(train_headers)
     studies, train_cache, train_mask = build_cache(train_slots, train_sides, "train")
 
-    table, train_indices, val_indices, gold_indices = make_clean_split(studies, labels, groups)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if device.type != "cuda":
-        raise RuntimeError("This training kernel requires a GPU")
-    model = build_model(dino_path)
-    model, state, history = train_model(
-        model, train_cache, train_mask, table,
-        train_indices, val_indices, gold_indices, device,
-    )
-
-    checkpoint = {
-        "state_dict": state,
-        "targets": TARGETS,
-        "slots": SLOTS,
-        "img_size": IMG_SIZE,
-        "crop_mm": CROP_MM,
-        "slice_band": SLICE_BAND,
-        "n_slices": N_SLICES,
-        "gold_training_count": 0,
-        "label_source": label_path.name,
-        "smoke": SMOKE,
-    }
-    torch.save(checkpoint, "clean_dino_smoke.pt" if SMOKE else "clean_dino_full.pt")
-    Path("metrics.json").write_text(json.dumps({
-        "history": history,
-        "train_studies": len(train_indices),
-        "validation_studies": len(val_indices),
-        "gold_eval_studies": len(gold_indices),
-        "gold_training_studies": 0,
-        "elapsed_seconds_before_test": time.time() - T0,
-    }, indent=2))
-
     test_df = pd.read_csv(root / "test.csv")
     test_series_csv = pd.read_csv(root / "test_series.csv")
     test_keep = set(test_df["StudyInstanceUID"])
@@ -692,10 +686,84 @@ def main() -> None:
     test_headers = study_headers(test_slots)
     test_sides = laterality_map(test_headers)
     test_studies, test_cache, test_mask = build_cache(test_slots, test_sides, "test")
-    test_predictions = predict(
-        model, test_cache, test_mask, np.arange(len(test_studies)), device
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device.type != "cuda":
+        raise RuntimeError("This training kernel requires a GPU")
+
+    fold_histories = []
+    fold_gold_predictions = []
+    fold_test_predictions = []
+    run_folds = 1 if SMOKE else 5
+    table = labels.set_index("StudyInstanceUID").loc[studies]
+    gold_indices = np.flatnonzero(table["is_gold"].values)
+
+    for fold in range(run_folds):
+        seed_everything(SEED + fold)
+        table, train_indices, val_indices, gold_indices, available_folds = make_clean_split(
+            studies, labels, groups, fold
+        )
+        if not SMOKE and available_folds != 5:
+            raise ValueError(f"Full ensemble requires 5 scanner folds, found {available_folds}")
+        model = build_model(dino_path)
+        model, state, history = train_model(
+            model, train_cache, train_mask, table,
+            train_indices, val_indices, gold_indices, device,
+        )
+
+        checkpoint = {
+            "state_dict": state,
+            "targets": TARGETS,
+            "slots": SLOTS,
+            "img_size": IMG_SIZE,
+            "crop_mm": CROP_MM,
+            "slice_band": SLICE_BAND,
+            "group_size": GROUP_SIZE,
+            "n_groups": N_GROUPS,
+            "cache_slices": CACHE_SLICES,
+            "fold": fold,
+            "train_studies": [studies[i] for i in train_indices],
+            "validation_studies": [studies[i] for i in val_indices],
+            "gold_training_count": 0,
+            "label_source": label_path.name,
+            "smoke": SMOKE,
+        }
+        checkpoint_name = "clean_dino_smoke.pt" if SMOKE else f"clean_dino_fold{fold}.pt"
+        torch.save(checkpoint, checkpoint_name)
+
+        fold_gold_predictions.append(
+            predict(model, train_cache, train_mask, gold_indices, device)
+        )
+        fold_test_predictions.append(
+            predict(model, test_cache, test_mask, np.arange(len(test_studies)), device)
+        )
+        fold_histories.append({
+            "fold": fold,
+            "train_studies": len(train_indices),
+            "validation_studies": len(val_indices),
+            "history": history,
+        })
+        del model, state
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    gold_columns = [f"{target}__gold" for target in TARGETS]
+    gold_truth = table[gold_columns].values[gold_indices].astype(int)
+    gold_ensemble = np.mean(fold_gold_predictions, axis=0)
+    gold_auc, gold_per_target = macro_auc(gold_truth, gold_ensemble)
+    test_ensemble = np.mean(
+        [rank_predictions(predictions) for predictions in fold_test_predictions], axis=0
     )
-    write_submission(test_predictions, test_studies, test_df)
+    Path("metrics.json").write_text(json.dumps({
+        "folds": fold_histories,
+        "ensemble_gold_auc_monitor_only": gold_auc,
+        "ensemble_gold_per_target": gold_per_target,
+        "gold_eval_studies": len(gold_indices),
+        "gold_training_studies": 0,
+        "elapsed_seconds_before_submission": time.time() - T0,
+    }, indent=2))
+    log(f"ensemble gold monitor ({run_folds} fold models): {gold_auc:.4f}")
+    write_submission(test_ensemble, test_studies, test_df)
     log(f"complete in {(time.time() - T0) / 3600:.2f} hours")
 
 

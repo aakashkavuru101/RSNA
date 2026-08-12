@@ -13,8 +13,8 @@ validation, six acquisition slots, and a DINOv2-Small attention-MIL classifier.
 - `src/`: reusable DICOM, preprocessing, label, fold, model, training, and inference code
 - `notebooks/`: Kaggle-oriented EDA, label extraction, preprocessing, training, and submission entry points
 - `configs/`: experiment configuration
-- `kaggle/clean_dino_train/`: offline Kaggle GPU trainer/inference kernel; starts in
-  a bounded smoke configuration and refuses silent fallback predictions
+- `kaggle/clean_dino_train/`: offline Kaggle GPU trainer/inference kernel, promoted
+  after a bounded smoke run and designed to refuse silent fallback predictions
 - `Kimi_Agent_RSNA Knee Detection Papers/`: research dossier and supporting analysis
 - `EXECUTION_PLAN.md`: phased implementation and validation plan
 - `AGENTS.md`: pinned environment facts, competition constraints, and safety rules

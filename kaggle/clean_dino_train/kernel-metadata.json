@@ -1,6 +1,6 @@
 {
-  "id": "aakashkavuru/rsna-knee-clean-dino-smoke",
-  "title": "RSNA Knee Clean DINOv2 Smoke",
+  "id": "aakashkavuru/rsna-knee-clean-dinov2-full",
+  "title": "RSNA Knee Clean DINOv2 Full",
   "code_file": "clean_dino_train.py",
   "language": "python",
   "kernel_type": "script",
