@@ -14,3 +14,14 @@ Kaggle kernel: `aakashkavuru/rsna-knee-clean-dinov2-smoke`, version 1
 
 Gold AUC was monitoring-only. Checkpoint selection used scanner-isolated silver AUC.
 No competition submission was made from this smoke run.
+
+## Full five-fold result
+
+Kaggle kernel: `aakashkavuru/rsna-knee-clean-dinov2-full`, version 1
+
+- Runtime: 6,159.8 seconds (1.71 hours) on one Tesla T4
+- DICOM decode: 21,334 selected series, 0 failures
+- Gold handling: 58 evaluation studies, **0 used for training**
+- Best scanner-isolated fold AUCs: 0.8055, 0.7929, 0.7696, 0.7877, 0.8046
+- Five-model gold monitor AUC: 0.8201
+- Public leaderboard: **0.857** (submission `55450279`)

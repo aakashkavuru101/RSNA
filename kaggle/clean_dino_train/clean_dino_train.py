@@ -30,18 +30,19 @@ from sklearn.model_selection import GroupKFold
 
 
 T0 = time.time()
-SEED = 20260812
+SEED = 20260813
 SMOKE = False
 SMOKE_NON_GOLD = 768
 EPOCHS = 2 if SMOKE else 8
-IMG_SIZE = 224
+IMG_SIZE = 336
+BASELINE_IMG_SIZE = 224
 CROP_MM = 130.0
 SLICE_BAND = (0.20, 0.80)
 GROUP_SIZE = 3
 N_GROUPS = 1 if SMOKE else 2
 CACHE_SLICES = GROUP_SIZE * N_GROUPS
-BATCH_STUDIES = 6
-EVAL_BATCH = 8
+BATCH_STUDIES = 3
+EVAL_BATCH = 4
 UNFREEZE_LAST = 4
 LR_BACKBONE = 1.0e-5
 LR_HEAD = 8.0e-4
@@ -49,6 +50,8 @@ WEIGHT_DECAY = 0.02
 HEADER_THREADS = 16
 DECODE_THREADS = 10
 TIME_LIMIT_S = 7.8 * 3600
+MIN_OOF_GAIN = 0.001
+BLEND_WEIGHTS = np.linspace(0.0, 1.0, 11)
 
 TARGETS = [
     "ACL", "MCL", "Medial Meniscus", "Lateral Meniscus", "Medial OA",
@@ -116,6 +119,24 @@ def find_dinov2_small() -> Path:
     if not hits:
         raise FileNotFoundError("Attached DINOv2-small model was not found")
     return sorted(hits, key=lambda p: len(str(p)))[0]
+
+
+def find_baseline_checkpoints() -> list[Path]:
+    """Find the five validated 224 px fold checkpoints from the prior kernel."""
+    candidates: dict[Path, dict[int, Path]] = {}
+    pattern = re.compile(r"clean_dino_fold([0-4])\.pt$")
+    for root, directories, files in os.walk("/kaggle/input"):
+        directories[:] = [d for d in directories if d not in ("train_series", "test_series")]
+        for filename in files:
+            match = pattern.fullmatch(filename)
+            if match:
+                candidates.setdefault(Path(root), {})[int(match.group(1))] = Path(root) / filename
+    complete = [files for files in candidates.values() if set(files) == set(range(5))]
+    if len(complete) != 1:
+        raise FileNotFoundError(
+            f"Expected one complete five-fold 224 px checkpoint package, found {len(complete)}"
+        )
+    return [complete[0][fold] for fold in range(5)]
 
 
 def validate_and_join_labels(train_df: pd.DataFrame, label_path: Path) -> pd.DataFrame:
@@ -336,7 +357,9 @@ def ordered_files(record: dict) -> list[str]:
     ])
 
 
-def _read_slot(job: tuple[str, int, dict, str | None]) -> tuple[str, int, np.ndarray | None]:
+def _read_slot(
+    job: tuple[str, int, dict, str | None]
+) -> tuple[str, int, np.ndarray | None, np.ndarray | None]:
     study, slot_index, record, side = job
     files = ordered_files(record)
     count = len(files)
@@ -359,7 +382,7 @@ def _read_slot(job: tuple[str, int, dict, str | None]) -> tuple[str, int, np.nda
             images.append(None)
     good = [i for i, image in enumerate(images) if image is not None]
     if not good:
-        return study, slot_index, None
+        return study, slot_index, None, None
     for i, image in enumerate(images):
         if image is None:
             images[i] = images[min(good, key=lambda j: abs(j - i))]
@@ -376,15 +399,25 @@ def _read_slot(job: tuple[str, int, dict, str | None]) -> tuple[str, int, np.nda
     low, high = np.percentile(volume, [1, 99])
     volume = np.clip((volume - low) / max(high - low, 1e-6), 0, 1)
     tensor = torch.from_numpy(np.ascontiguousarray(volume)).unsqueeze(0)
-    tensor = F.interpolate(tensor, (IMG_SIZE, IMG_SIZE), mode="bilinear", align_corners=False)
-    output = (tensor.squeeze(0) * 255).round().clamp(0, 255).to(torch.uint8).numpy()
+    high_res = F.interpolate(
+        tensor, (IMG_SIZE, IMG_SIZE), mode="bilinear", align_corners=False
+    )
+    baseline = F.interpolate(
+        tensor, (BASELINE_IMG_SIZE, BASELINE_IMG_SIZE), mode="bilinear", align_corners=False
+    )
+    output = (high_res.squeeze(0) * 255).round().clamp(0, 255).to(torch.uint8).numpy()
+    baseline_output = (
+        (baseline.squeeze(0) * 255).round().clamp(0, 255).to(torch.uint8).numpy()
+    )
     plane = SLOTS[slot_index][1]
     if side == "R":
         if plane in ("Coronal", "Axial"):
             output = output[:, :, ::-1].copy()
+            baseline_output = baseline_output[:, :, ::-1].copy()
         elif plane == "Sagittal":
             output = output[::-1].copy()
-    return study, slot_index, output
+            baseline_output = baseline_output[::-1].copy()
+    return study, slot_index, output, baseline_output
 
 
 def build_cache(slot_map: dict[str, list[dict | None]], sides: dict[str, str | None], tag: str):
@@ -392,6 +425,10 @@ def build_cache(slot_map: dict[str, list[dict | None]], sides: dict[str, str | N
     index = {study: i for i, study in enumerate(studies)}
     cache = np.zeros(
         (len(studies), len(SLOTS), CACHE_SLICES, IMG_SIZE, IMG_SIZE), dtype=np.uint8
+    )
+    baseline_cache = np.zeros(
+        (len(studies), len(SLOTS), CACHE_SLICES, BASELINE_IMG_SIZE, BASELINE_IMG_SIZE),
+        dtype=np.uint8,
     )
     mask = np.zeros((len(studies), len(SLOTS)), dtype=np.float32)
     jobs = [
@@ -403,11 +440,14 @@ def build_cache(slot_map: dict[str, list[dict | None]], sides: dict[str, str | N
     log(f"{tag}: decoding {len(jobs)} selected series")
     failures = 0
     with ThreadPoolExecutor(max_workers=DECODE_THREADS) as pool:
-        for done, (study, slot_index, output) in enumerate(pool.map(_read_slot, jobs), 1):
+        for done, (study, slot_index, output, baseline_output) in enumerate(
+            pool.map(_read_slot, jobs), 1
+        ):
             if output is None:
                 failures += 1
             else:
                 cache[index[study], slot_index] = output
+                baseline_cache[index[study], slot_index] = baseline_output
                 mask[index[study], slot_index] = 1
             if done % 1000 == 0:
                 log(f"{tag}: decoded {done}/{len(jobs)}")
@@ -415,8 +455,9 @@ def build_cache(slot_map: dict[str, list[dict | None]], sides: dict[str, str | N
                 raise TimeoutError("Time budget exhausted during DICOM decoding")
     if np.any(mask.sum(axis=1) == 0):
         raise RuntimeError(f"{tag}: at least one study has no decodable slot")
-    log(f"{tag}: cache {cache.nbytes / 1024**3:.2f} GiB, failures={failures}")
-    return studies, cache, mask
+    total_gib = (cache.nbytes + baseline_cache.nbytes) / 1024**3
+    log(f"{tag}: dual cache {total_gib:.2f} GiB, failures={failures}")
+    return studies, cache, baseline_cache, mask
 
 
 class SlotHead(nn.Module):
@@ -469,6 +510,30 @@ def build_model(model_path: Path) -> KneeDINO:
     trainable = sum(p.numel() for p in backbone.parameters() if p.requires_grad)
     log(f"DINOv2: {len(layers)} blocks, last {UNFREEZE_LAST} open, {trainable/1e6:.1f}M trainable")
     return KneeDINO(backbone)
+
+
+def load_baseline_model(
+    model_path: Path, checkpoint_path: Path, expected_fold: int, device: torch.device
+) -> KneeDINO:
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    required = {
+        "fold": expected_fold,
+        "img_size": BASELINE_IMG_SIZE,
+        "gold_training_count": 0,
+        "targets": TARGETS,
+        "slots": SLOTS,
+        "group_size": GROUP_SIZE,
+        "n_groups": N_GROUPS,
+    }
+    for key, expected in required.items():
+        if checkpoint.get(key) != expected:
+            raise ValueError(
+                f"Baseline fold {expected_fold} has {key}={checkpoint.get(key)!r}, "
+                f"expected {expected!r}"
+            )
+    model = build_model(model_path)
+    model.load_state_dict(checkpoint["state_dict"], strict=True)
+    return model.to(device).eval()
 
 
 def macro_auc(truth: np.ndarray, score: np.ndarray) -> tuple[float, dict[str, float]]:
@@ -666,6 +731,7 @@ def main() -> None:
     root = find_competition_root()
     label_path = find_v4_labels()
     dino_path = find_dinov2_small()
+    baseline_checkpoints = find_baseline_checkpoints()
     train_df = pd.read_csv(root / "train.csv")
     labels = validate_and_join_labels(train_df, label_path)
     train_keep = choose_smoke_studies(labels)
@@ -676,7 +742,45 @@ def main() -> None:
     train_headers = study_headers(train_slots)
     train_sides = laterality_map(train_headers)
     groups = scanner_groups(train_headers)
-    studies, train_cache, train_mask = build_cache(train_slots, train_sides, "train")
+    studies, train_cache, train_baseline_cache, train_mask = build_cache(
+        train_slots, train_sides, "train"
+    )
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device.type != "cuda":
+        raise RuntimeError("This training kernel requires a GPU")
+    run_folds = 1 if SMOKE else 5
+    table = labels.set_index("StudyInstanceUID").loc[studies]
+    targets = table[TARGETS].values.astype(np.float32)
+    eligible = np.flatnonzero(~table["is_gold"].values)
+    gold_indices = np.flatnonzero(table["is_gold"].values)
+
+    # Reproduce the validated 224 px ensemble on pixels resized directly from the same
+    # normalized volumes. Its OOF predictions are the regression guard for this run.
+    baseline_oof = np.full((len(studies), len(TARGETS)), np.nan, dtype=np.float32)
+    baseline_gold_predictions = []
+    for fold in range(run_folds):
+        table, _, val_indices, gold_indices, available_folds = make_clean_split(
+            studies, labels, groups, fold
+        )
+        if available_folds != run_folds:
+            raise ValueError(f"Expected {run_folds} scanner folds, found {available_folds}")
+        baseline_model = load_baseline_model(
+            dino_path, baseline_checkpoints[fold], fold, device
+        )
+        baseline_oof[val_indices] = predict(
+            baseline_model, train_baseline_cache, train_mask, val_indices, device
+        )
+        baseline_gold_predictions.append(
+            predict(baseline_model, train_baseline_cache, train_mask, gold_indices, device)
+        )
+        del baseline_model
+        gc.collect()
+        torch.cuda.empty_cache()
+    if not np.isfinite(baseline_oof[eligible]).all():
+        raise RuntimeError("Baseline OOF predictions do not cover every non-gold study")
+    del train_baseline_cache
+    gc.collect()
 
     test_df = pd.read_csv(root / "test.csv")
     test_series_csv = pd.read_csv(root / "test_series.csv")
@@ -685,18 +789,31 @@ def main() -> None:
     test_slots = choose_slots(test_series)
     test_headers = study_headers(test_slots)
     test_sides = laterality_map(test_headers)
-    test_studies, test_cache, test_mask = build_cache(test_slots, test_sides, "test")
+    test_studies, test_cache, test_baseline_cache, test_mask = build_cache(
+        test_slots, test_sides, "test"
+    )
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if device.type != "cuda":
-        raise RuntimeError("This training kernel requires a GPU")
+    baseline_test_predictions = []
+    for fold in range(run_folds):
+        baseline_model = load_baseline_model(
+            dino_path, baseline_checkpoints[fold], fold, device
+        )
+        baseline_test_predictions.append(
+            predict(
+                baseline_model, test_baseline_cache, test_mask,
+                np.arange(len(test_studies)), device,
+            )
+        )
+        del baseline_model
+        gc.collect()
+        torch.cuda.empty_cache()
+    del test_baseline_cache
+    gc.collect()
 
     fold_histories = []
     fold_gold_predictions = []
     fold_test_predictions = []
-    run_folds = 1 if SMOKE else 5
-    table = labels.set_index("StudyInstanceUID").loc[studies]
-    gold_indices = np.flatnonzero(table["is_gold"].values)
+    new_oof = np.full((len(studies), len(TARGETS)), np.nan, dtype=np.float32)
 
     for fold in range(run_folds):
         seed_everything(SEED + fold)
@@ -731,6 +848,9 @@ def main() -> None:
         checkpoint_name = "clean_dino_smoke.pt" if SMOKE else f"clean_dino_fold{fold}.pt"
         torch.save(checkpoint, checkpoint_name)
 
+        new_oof[val_indices] = predict(
+            model, train_cache, train_mask, val_indices, device
+        )
         fold_gold_predictions.append(
             predict(model, train_cache, train_mask, gold_indices, device)
         )
@@ -747,22 +867,64 @@ def main() -> None:
         gc.collect()
         torch.cuda.empty_cache()
 
+    if not np.isfinite(new_oof[eligible]).all():
+        raise RuntimeError("New OOF predictions do not cover every non-gold study")
+
+    # Select one conservative family-level blend on pooled scanner-isolated OOF. Gold
+    # predictions are deliberately not available to this decision.
+    oof_truth = (targets[eligible] > 0.5).astype(int)
+    baseline_oof_rank = rank_predictions(baseline_oof[eligible])
+    new_oof_rank = rank_predictions(new_oof[eligible])
+    baseline_oof_auc, _ = macro_auc(oof_truth, baseline_oof_rank)
+    new_oof_auc, _ = macro_auc(oof_truth, new_oof_rank)
+    blend_scores = {}
+    for weight in BLEND_WEIGHTS:
+        blended = (1.0 - weight) * baseline_oof_rank + weight * new_oof_rank
+        blend_scores[float(weight)], _ = macro_auc(oof_truth, blended)
+    best_weight = max(blend_scores, key=blend_scores.get)
+    best_oof_auc = blend_scores[best_weight]
+    log(
+        f"pooled OOF: baseline={baseline_oof_auc:.4f}, new={new_oof_auc:.4f}, "
+        f"best blend={best_oof_auc:.4f} at new_weight={best_weight:.1f}"
+    )
+    if best_oof_auc < baseline_oof_auc + MIN_OOF_GAIN:
+        raise RuntimeError(
+            f"No honest OOF improvement ({best_oof_auc:.6f} vs "
+            f"{baseline_oof_auc:.6f}); refusing to write submission.csv"
+        )
+
     gold_columns = [f"{target}__gold" for target in TARGETS]
     gold_truth = table[gold_columns].values[gold_indices].astype(int)
-    gold_ensemble = np.mean(fold_gold_predictions, axis=0)
+    baseline_gold_ensemble = rank_predictions(np.mean(baseline_gold_predictions, axis=0))
+    new_gold_ensemble = rank_predictions(np.mean(fold_gold_predictions, axis=0))
+    gold_ensemble = (
+        (1.0 - best_weight) * baseline_gold_ensemble + best_weight * new_gold_ensemble
+    )
     gold_auc, gold_per_target = macro_auc(gold_truth, gold_ensemble)
-    test_ensemble = np.mean(
+    baseline_test_ensemble = rank_predictions(
+        np.mean([rank_predictions(p) for p in baseline_test_predictions], axis=0)
+    )
+    new_test_ensemble = rank_predictions(np.mean(
         [rank_predictions(predictions) for predictions in fold_test_predictions], axis=0
+    ))
+    test_ensemble = (
+        (1.0 - best_weight) * baseline_test_ensemble + best_weight * new_test_ensemble
     )
     Path("metrics.json").write_text(json.dumps({
         "folds": fold_histories,
+        "baseline_oof_auc": baseline_oof_auc,
+        "new_oof_auc": new_oof_auc,
+        "best_blend_oof_auc": best_oof_auc,
+        "new_model_blend_weight": best_weight,
+        "blend_oof_scores": {str(k): v for k, v in blend_scores.items()},
+        "minimum_required_oof_gain": MIN_OOF_GAIN,
         "ensemble_gold_auc_monitor_only": gold_auc,
         "ensemble_gold_per_target": gold_per_target,
         "gold_eval_studies": len(gold_indices),
         "gold_training_studies": 0,
         "elapsed_seconds_before_submission": time.time() - T0,
     }, indent=2))
-    log(f"ensemble gold monitor ({run_folds} fold models): {gold_auc:.4f}")
+    log(f"blended ensemble gold monitor: {gold_auc:.4f}")
     write_submission(test_ensemble, test_studies, test_df)
     log(f"complete in {(time.time() - T0) / 3600:.2f} hours")
 

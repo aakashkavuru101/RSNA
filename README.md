@@ -40,6 +40,11 @@ selection uses scanner-isolated silver validation. The attached DINOv2-Small mod
 loaded locally with internet disabled. Neither the label table nor pretrained weights
 are redistributed in this repository.
 
+The second candidate preserves the scored 224-pixel ensemble and trains a complementary
+336-pixel five-fold family. It chooses one resolution-blend weight using pooled
+scanner-isolated OOF predictions only. The kernel refuses to write `submission.csv`
+unless that blend improves the validated 224-pixel baseline by at least 0.001 macro AUC.
+
 ## License
 
 Code and project-authored documentation are licensed under

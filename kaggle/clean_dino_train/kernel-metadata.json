@@ -1,6 +1,6 @@
 {
-  "id": "aakashkavuru/rsna-knee-clean-dinov2-full",
-  "title": "RSNA Knee Clean DINOv2 Full",
+  "id": "aakashkavuru/rsna-knee-dinov2-resolution-blend",
+  "title": "RSNA Knee DINOv2 Resolution Blend",
   "code_file": "clean_dino_train.py",
   "language": "python",
   "kernel_type": "script",
@@ -15,7 +15,9 @@
   "competition_sources": [
     "rsna-knee-abnormality-detection"
   ],
-  "kernel_sources": [],
+  "kernel_sources": [
+    "aakashkavuru/rsna-knee-clean-dinov2-full"
+  ],
   "model_sources": [
     "metaresearch/dinov2/PyTorch/small/1"
   ]
