@@ -1,0 +1,54 @@
+# RSNA Knee Abnormality Detection — Competition Metadata
+
+competition:
+  name: rsna-knee-abnormality-detection
+  url: https://www.kaggle.com/competitions/rsna-knee-abnormality-detection
+  host: RSNA
+  task: Multi-label classification of knee MRI studies
+  metric: Macro-averaged ROC AUC across 12 binary labels
+  deadline_final: "2026-10-22T23:59:00Z"
+  deadline_entry: "2026-10-15T23:59:00Z"
+  deadline_winners: "2026-11-05T23:59:00Z"
+
+data:
+  train_studies: 4407
+  gold_labeled_studies: 58
+  silver_labeled_studies: 4349
+  train_series: 24371
+  total_files: 819640
+  total_size_gb: 569.76
+  test_studies_approx: 1300
+  languages: ~10  # EN/ES/NL dominant; FR/DE/PT/IT/TR tail; BG/EL observed
+  sites: 16
+  dicom_tags_allowlist: 86
+
+labels:
+  count: 12
+  columns:
+    - ACL
+    - MCL
+    - Medial Meniscus
+    - Lateral Meniscus
+    - Medial OA
+    - Lateral OA
+    - PF OA
+    - Effusion
+    - Synovitis
+    - Baker's
+    - Contusion
+    - Fracture
+  laterality_pairs:
+    - [Medial Meniscus, Lateral Meniscus]
+    - [Medial OA, Lateral OA]
+
+submission:
+  file: submission.csv
+  format: "StudyInstanceUID,ACL,MCL,Medial Meniscus,Lateral Meniscus,Medial OA,Lateral OA,PF OA,Effusion,Synovitis,Baker's,Contusion,Fracture"
+  runtime_limit_hours: 9
+  internet: false
+  notebook_only: true
+
+prizes:
+  total: 77000
+  main_leaderboard: 59000  # 10 places
+  efficiency_track: 18000  # 3 places
