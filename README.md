@@ -21,6 +21,8 @@ validation, six acquisition slots, and a DINOv2-Small attention-MIL classifier.
   DINO patch attention, guarded against the exact scored 0.871 OOF ensemble
 - `kaggle/sequence_diagnostics/`: read-only DICOM-header audit of sequence contrast
   routing and study-wide versus single-series laterality normalization
+- `kaggle/routed_dino_train/`: sequence-specific DINO training with three contiguous
+  windows per slot, unaddressed-label masking, focal patch pooling, and a 0.849 OOF gate
 - `Kimi_Agent_RSNA Knee Detection Papers/`: research dossier and supporting analysis
 - `EXECUTION_PLAN.md`: phased implementation and validation plan
 - `AGENTS.md`: pinned environment facts, competition constraints, and safety rules
@@ -56,6 +58,17 @@ interleaved slice channels with true adjacent three-slice windows, applies mild
 scanner-frequency balancing, and learns target-specific patch and acquisition-slot
 attention. Coarse per-target blending is selected only from scanner-isolated OOF and
 must improve the exact 0.871 scored blend before a candidate file is emitted.
+
+The routed experiment acts on the header audit rather than the public structural flag:
+it separates fat-suppressed fluid, non-fat-suppressed fluid, and T1 acquisitions. It
+uses nine physically ordered slices per available slot at 280 pixels, masks exact 0.25
+and 0.50 report-label cells from the loss, and pools local findings over three windows.
+The training kernel emits immutable fold checkpoints, exact OOF predictions, and an
+inference manifest. Its deployment gate is deliberately routed-only, so the later
+hidden-test scorer can reproduce it from those checkpoints without retraining or
+depending on a three-row public preview. It withholds even that visible-test preview
+unless routed macro OOF reaches 0.849, improves the previous candidate by 0.002, and
+does not regress any scanner fold.
 
 ## License
 
