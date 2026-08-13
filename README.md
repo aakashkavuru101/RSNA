@@ -15,6 +15,8 @@ validation, six acquisition slots, and a DINOv2-Small attention-MIL classifier.
 - `configs/`: experiment configuration
 - `kaggle/clean_dino_train/`: offline Kaggle GPU trainer/inference kernel, promoted
   after a bounded smoke run and designed to refuse silent fallback predictions
+- `kaggle/oof_diagnostics/`: private checkpoint-only reconstruction of study-level
+  scanner-isolated OOF predictions and target/scanner/sequence-coverage gap reports
 - `Kimi_Agent_RSNA Knee Detection Papers/`: research dossier and supporting analysis
 - `EXECUTION_PLAN.md`: phased implementation and validation plan
 - `AGENTS.md`: pinned environment facts, competition constraints, and safety rules
