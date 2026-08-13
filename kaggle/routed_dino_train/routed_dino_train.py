@@ -169,6 +169,29 @@ def find_unique_artifact(filename: str, marker: str) -> Path:
     return hits[0]
 
 
+def find_routed_output() -> Path | None:
+    """Find a complete, OOF-approved routed checkpoint family for inference mode."""
+    hits = []
+    for root, directories, files in os.walk("/kaggle/input"):
+        directories[:] = [d for d in directories if d not in ("train_series", "test_series")]
+        if "weights_manifest.json" not in files:
+            continue
+        path = Path(root)
+        try:
+            manifest = json.loads((path / "weights_manifest.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        expected = [path / f"routed_dino_fold{fold}.pt" for fold in range(5)]
+        if (
+            manifest.get("architecture") == "routed_focal_pool_dino_v1"
+            and all(checkpoint.is_file() for checkpoint in expected)
+        ):
+            hits.append(path)
+    if len(hits) > 1:
+        raise FileNotFoundError(f"Expected at most one routed checkpoint output, found {len(hits)}")
+    return hits[0] if hits else None
+
+
 def safe_target(target: str) -> str:
     return target.lower().replace(" ", "_").replace("'", "")
 
@@ -868,6 +891,61 @@ def write_candidate_preview(predictions, studies, test_df, path="candidate_previ
     return output
 
 
+def inference_main(output_root: Path) -> None:
+    """Run hidden-test inference from approved checkpoints without any retraining."""
+    seed_everything()
+    manifest = json.loads((output_root / "weights_manifest.json").read_text())
+    if not manifest.get("candidate_ready", False):
+        raise RuntimeError("Routed OOF gates did not pass; refusing to create submission.csv")
+    if float(manifest.get("routed_oof_auc", 0.0)) < TARGET_OOF_GATE:
+        raise RuntimeError("Routed OOF is below the deployment threshold")
+    if manifest.get("targets") != TARGETS or manifest.get("slots") != [list(row) for row in SLOTS]:
+        raise ValueError("Checkpoint manifest does not match this inference implementation")
+
+    root = find_competition_root()
+    dino_path = find_dinov2_small()
+    test_df = pd.read_csv(root / "test.csv")
+    test_series_csv = pd.read_csv(root / "test_series.csv")
+    test_keep = set(test_df["StudyInstanceUID"])
+    test_series = list_series(root / "test_series", test_series_csv, test_keep)
+    test_series = annotate_series(test_series)
+    test_slots = choose_slots(test_series)
+    test_sides = laterality_map(test_series)
+    test_studies, test_cache, test_mask = build_cache(test_slots, test_sides, "hidden-test")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device.type != "cuda":
+        raise RuntimeError("This inference kernel requires a GPU")
+    fold_predictions = []
+    for fold in range(5):
+        checkpoint_path = output_root / f"routed_dino_fold{fold}.pt"
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        if checkpoint.get("architecture") != manifest["architecture"]:
+            raise ValueError(f"Fold {fold} architecture does not match manifest")
+        if checkpoint.get("gold_training_count") != 0:
+            raise ValueError(f"Fold {fold} reports gold-label training leakage")
+        model = build_model(dino_path)
+        model.load_state_dict(checkpoint["state_dict"], strict=True)
+        model = model.to(device)
+        fold_predictions.append(
+            rank_predictions(predict(
+                model, test_cache, test_mask, np.arange(len(test_studies)), device
+            ))
+        )
+        log(f"hidden-test: completed fold {fold + 1}/5")
+        del model, checkpoint
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    ensemble = rank_predictions(np.mean(fold_predictions, axis=0))
+    submission = write_candidate_preview(
+        ensemble, test_studies, test_df, path="submission.csv"
+    )
+    if submission.shape != (len(test_df), len(TARGETS) + 1):
+        raise RuntimeError("Final submission shape validation failed")
+    log(f"inference-only submission complete in {(time.time() - T0) / 3600:.2f} hours")
+
+
 def load_previous_candidate(
     oof_path: Path,
     eligible_studies: np.ndarray,
@@ -1207,4 +1285,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    routed_output = find_routed_output()
+    if routed_output is None:
+        main()
+    else:
+        log(f"approved routed output detected at {routed_output}; entering inference-only mode")
+        inference_main(routed_output)

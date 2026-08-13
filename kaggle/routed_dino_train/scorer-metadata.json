@@ -1,0 +1,21 @@
+{
+  "id": "aakashkavuru/rsna-knee-routed-dinov2-submit",
+  "title": "RSNA Knee Routed DINOv2 Submit",
+  "code_file": "routed_dino_train.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "false",
+  "machine_shape": "NvidiaTeslaT4",
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "kernel_sources": [
+    "aakashkavuru/rsna-knee-routed-dinov2"
+  ],
+  "model_sources": [
+    "metaresearch/dinov2/PyTorch/small/1"
+  ]
+}

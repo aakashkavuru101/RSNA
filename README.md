@@ -68,7 +68,9 @@ inference manifest. Its deployment gate is deliberately routed-only, so the late
 hidden-test scorer can reproduce it from those checkpoints without retraining or
 depending on a three-row public preview. It withholds even that visible-test preview
 unless routed macro OOF reaches 0.849, improves the previous candidate by 0.002, and
-does not regress any scanner fold.
+does not regress any scanner fold. The same script automatically switches to
+inference-only mode when an approved routed output is attached; `scorer-metadata.json`
+defines that submission kernel and refuses to write `submission.csv` for a failed gate.
 
 ## License
 
