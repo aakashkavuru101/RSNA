@@ -17,6 +17,8 @@ validation, six acquisition slots, and a DINOv2-Small attention-MIL classifier.
   after a bounded smoke run and designed to refuse silent fallback predictions
 - `kaggle/oof_diagnostics/`: private checkpoint-only reconstruction of study-level
   scanner-isolated OOF predictions and target/scanner/sequence-coverage gap reports
+- `kaggle/localized_dino_train/`: contiguous 2.5D slice windows plus target-specific
+  DINO patch attention, guarded against the exact scored 0.871 OOF ensemble
 - `Kimi_Agent_RSNA Knee Detection Papers/`: research dossier and supporting analysis
 - `EXECUTION_PLAN.md`: phased implementation and validation plan
 - `AGENTS.md`: pinned environment facts, competition constraints, and safety rules
@@ -46,6 +48,12 @@ The second candidate preserves the scored 224-pixel ensemble and trains a comple
 336-pixel five-fold family. It chooses one resolution-blend weight using pooled
 scanner-isolated OOF predictions only. The kernel refuses to write `submission.csv`
 unless that blend improves the validated 224-pixel baseline by at least 0.001 macro AUC.
+
+The localized experiment leaves both scored families untouched. It replaces the
+interleaved slice channels with true adjacent three-slice windows, applies mild
+scanner-frequency balancing, and learns target-specific patch and acquisition-slot
+attention. Coarse per-target blending is selected only from scanner-isolated OOF and
+must improve the exact 0.871 scored blend before a candidate file is emitted.
 
 ## License
 
