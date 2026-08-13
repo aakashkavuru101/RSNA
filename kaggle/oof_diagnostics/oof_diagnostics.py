@@ -18,7 +18,7 @@ import pandas as pd
 import torch
 from sklearn.metrics import roc_auc_score
 
-import pipeline as p
+import __main__ as p
 
 
 BLEND_224 = 0.20
