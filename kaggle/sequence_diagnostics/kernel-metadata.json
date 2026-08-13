@@ -1,0 +1,17 @@
+{
+  "id": "aakashkavuru/rsna-knee-sequence-diagnostics",
+  "title": "RSNA Knee Sequence Diagnostics",
+  "code_file": "sequence_diagnostics.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "false",
+  "enable_tpu": "false",
+  "enable_internet": "false",
+  "dataset_sources": [],
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "kernel_sources": [],
+  "model_sources": []
+}

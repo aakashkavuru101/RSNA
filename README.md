@@ -19,6 +19,8 @@ validation, six acquisition slots, and a DINOv2-Small attention-MIL classifier.
   scanner-isolated OOF predictions and target/scanner/sequence-coverage gap reports
 - `kaggle/localized_dino_train/`: contiguous 2.5D slice windows plus target-specific
   DINO patch attention, guarded against the exact scored 0.871 OOF ensemble
+- `kaggle/sequence_diagnostics/`: read-only DICOM-header audit of sequence contrast
+  routing and study-wide versus single-series laterality normalization
 - `Kimi_Agent_RSNA Knee Detection Papers/`: research dossier and supporting analysis
 - `EXECUTION_PLAN.md`: phased implementation and validation plan
 - `AGENTS.md`: pinned environment facts, competition constraints, and safety rules
