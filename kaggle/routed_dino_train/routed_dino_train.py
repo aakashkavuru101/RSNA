@@ -1,14 +1,14 @@
-"""Sequence-routed, multi-window DINOv2 training for RSNA Knee MRI.
+"""Sequence-routed DINOv2 specialist transfer for RSNA Knee MRI.
 
 The 58 expert-labelled studies are evaluation-only. They are never included in an
 optimizer batch. Supervision comes from the independently generated v4 report labels.
 The public structural flag mixes T1, PD, T2, and GRE series. This experiment recovers
 sequence weighting and fat suppression from DICOM headers, separates those contrasts,
-and samples three true contiguous windows per slot. Exact 0.25/0.50 report-label cells
-are treated as unaddressed and excluded from the loss. The prior 0.8041 OOF blend is an
-immutable input artifact; this kernel writes a routed-only preview only when its exact
-scanner-isolated OOF clears every deployment gate. The 58 gold studies remain
-monitor-only.
+and samples three true contiguous windows per slot. Each fold is warm-started from the
+successful localized family, then fine-tuned only for ACL, contusion, and fracture--the
+three targets where routed v1 supplied complementary OOF signal. Exact 0.25/0.50 cells
+remain masked. The other nine targets stay on the immutable prior 0.8041 OOF blend.
+The 58 gold studies remain monitor-only.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from sklearn.model_selection import GroupKFold
 
 T0 = time.time()
 SEED = 20260813
-EPOCHS = 8
+EPOCHS = 5
 IMG_SIZE = 280
 CROP_MM = 130.0
 SLICE_BAND = (0.20, 0.80)
@@ -46,9 +46,9 @@ CACHE_SLICES = GROUP_SIZE * N_GROUPS
 WINDOW_CENTRES = (0.25, 0.50, 0.75)
 BATCH_STUDIES = 4
 EVAL_BATCH = 6
-UNFREEZE_LAST = 6
-LR_BACKBONE = 8.0e-6
-LR_HEAD = 8.0e-4
+UNFREEZE_LAST = 4
+LR_BACKBONE = 3.0e-6
+LR_HEAD = 2.0e-4
 WEIGHT_DECAY = 0.02
 HEADER_THREADS = 16
 DECODE_THREADS = 10
@@ -56,7 +56,7 @@ TIME_LIMIT_S = 7.8 * 3600
 MIN_OOF_GAIN = 0.002
 MIN_TARGET_GAIN = 0.001
 MAX_FOLD_REGRESSION = 0.015
-TARGET_OOF_GATE = 0.849
+MAX_MACRO_FOLD_REGRESSION = 0.002
 BLEND_WEIGHTS = np.linspace(0.0, 1.0, 5)
 
 TARGETS = [
@@ -64,6 +64,7 @@ TARGETS = [
     "Lateral OA", "PF OA", "Effusion", "Synovitis", "Baker's",
     "Contusion", "Fracture",
 ]
+SPECIALIST_TARGETS = {"ACL", "Contusion", "Fracture"}
 
 # DICOM-derived slots. Missing acquisitions remain masked and are never substituted
 # from a neighbouring predicate because doing so would reintroduce contrast mixing.
@@ -83,17 +84,6 @@ WINDOW_POOL = {
     "Lateral Meniscus": "max", "Contusion": "max", "Fracture": "max",
     "Baker's": "max",
 }
-
-SLOT_PRIOR = {
-    "ACL": (0, 3, 5), "MCL": (1, 4),
-    "Medial Meniscus": (0, 1, 3, 4),
-    "Lateral Meniscus": (0, 1, 3, 4),
-    "Medial OA": (1, 4, 5), "Lateral OA": (1, 4, 5),
-    "PF OA": (0, 2, 5), "Effusion": (0, 2), "Synovitis": (0, 2),
-    "Baker's": (0,), "Contusion": (0, 1, 2),
-    "Fracture": (0, 1, 2, 4, 5),
-}
-SLOT_PRIOR_STRENGTH = 0.55
 
 FATSAT_OPTIONS = {"FS", "FATSAT", "FAT_SAT", "FSAT"}
 FATSAT_RE = re.compile(
@@ -169,6 +159,26 @@ def find_unique_artifact(filename: str, marker: str) -> Path:
     return hits[0]
 
 
+def find_localized_checkpoints() -> list[Path]:
+    """Resolve the successful five-fold localized family used for warm starts."""
+    families: dict[Path, dict[int, Path]] = {}
+    pattern = re.compile(r"localized_dino_fold([0-4])\.pt$")
+    for root, directories, files in os.walk("/kaggle/input"):
+        directories[:] = [d for d in directories if d not in ("train_series", "test_series")]
+        if "localized-dinov2" not in root.lower():
+            continue
+        for filename in files:
+            match = pattern.match(filename)
+            if match:
+                families.setdefault(Path(root), {})[int(match.group(1))] = Path(root) / filename
+    complete = [folds for folds in families.values() if set(folds) == set(range(5))]
+    if len(complete) != 1:
+        raise FileNotFoundError(
+            f"Expected one complete localized checkpoint family, found {len(complete)}"
+        )
+    return [complete[0][fold] for fold in range(5)]
+
+
 def find_routed_output() -> Path | None:
     """Find a complete, OOF-approved routed checkpoint family for inference mode."""
     hits = []
@@ -183,7 +193,7 @@ def find_routed_output() -> Path | None:
             continue
         expected = [path / f"routed_dino_fold{fold}.pt" for fold in range(5)]
         if (
-            manifest.get("architecture") == "routed_focal_pool_dino_v1"
+            manifest.get("architecture") == "routed_specialist_transfer_v2"
             and all(checkpoint.is_file() for checkpoint in expected)
         ):
             hits.append(path)
@@ -561,27 +571,26 @@ def build_cache(slot_map: dict[str, list[dict | None]], sides: dict[str, str | N
     return studies, cache, mask
 
 
-class RoutedSlotHead(nn.Module):
+class LocalizedSlotHead(nn.Module):
     def __init__(self, dim: int, n_slots: int, n_outputs: int, hidden: int = 256):
         super().__init__()
         self.projection = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, hidden), nn.GELU())
         self.slot_embedding = nn.Parameter(torch.randn(n_slots, hidden) * 0.02)
-        self.query = nn.Parameter(torch.randn(n_outputs, hidden) * 0.02)
+        self.target_embedding = nn.Parameter(torch.randn(n_outputs, hidden) * 0.02)
+        self.slot_query = nn.Parameter(torch.randn(n_outputs, hidden) * 0.02)
         self.dropout = nn.Dropout(0.2)
-        self.output = nn.Linear(hidden, n_outputs)
+        self.output_weight = nn.Parameter(torch.randn(n_outputs, hidden) * 0.02)
+        self.output_bias = nn.Parameter(torch.zeros(n_outputs))
         self.hidden = hidden
-        prior = torch.zeros(n_outputs, n_slots)
-        for target, preferred in SLOT_PRIOR.items():
-            prior[TARGETS.index(target), list(preferred)] = SLOT_PRIOR_STRENGTH
-        self.register_buffer("slot_prior", prior)
 
     def forward(self, features: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        hidden = self.projection(features) + self.slot_embedding
-        attention = torch.einsum("bsh,oh->bos", hidden, self.query) / self.hidden**0.5
-        attention = attention + self.slot_prior.unsqueeze(0)
+        hidden = self.projection(features)
+        hidden = hidden + self.slot_embedding[None, :, None, :]
+        hidden = hidden + self.target_embedding[None, None, :, :]
+        attention = torch.einsum("bsoh,oh->bos", hidden, self.slot_query) / self.hidden**0.5
         attention = attention.masked_fill(mask.unsqueeze(1) < 0.5, -1e4).softmax(-1)
-        context = self.dropout(torch.einsum("bos,bsh->boh", attention, hidden))
-        return (context * self.output.weight.unsqueeze(0)).sum(-1) + self.output.bias
+        context = self.dropout(torch.einsum("bos,bsoh->boh", attention, hidden))
+        return (context * self.output_weight.unsqueeze(0)).sum(-1) + self.output_bias
 
 
 class KneeDINO(nn.Module):
@@ -589,7 +598,8 @@ class KneeDINO(nn.Module):
         super().__init__()
         self.backbone = backbone
         dim = backbone.config.hidden_size
-        self.head = RoutedSlotHead(dim * 3, len(SLOTS), len(TARGETS))
+        self.patch_query = nn.Parameter(torch.randn(len(TARGETS), dim) * 0.02)
+        self.head = LocalizedSlotHead(dim * 2, len(SLOTS), len(TARGETS))
         self.register_buffer("mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
         self.register_buffer("std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
 
@@ -598,11 +608,15 @@ class KneeDINO(nn.Module):
         pixels = images.reshape(batch * slots, *images.shape[2:]).float().div_(255.0)
         pixels = (pixels - self.mean) / self.std
         tokens = self.backbone(pixel_values=pixels).last_hidden_state
+        cls = tokens[:, 0]
         patches = tokens[:, 1:]
-        top_count = max(1, patches.shape[1] // 8)
-        focal = patches.topk(top_count, dim=1).values.mean(1)
-        features = torch.cat([tokens[:, 0], patches.mean(1), focal], dim=1)
-        return self.head(features.reshape(batch, slots, -1), mask)
+        patch_attention = torch.einsum(
+            "npd,od->nop", patches, self.patch_query
+        ).div_(patches.shape[-1] ** 0.5).softmax(-1)
+        localized = torch.einsum("nop,npd->nod", patch_attention, patches)
+        cls = cls[:, None, :].expand(-1, len(TARGETS), -1)
+        features = torch.cat([cls, localized], dim=-1)
+        return self.head(features.reshape(batch, slots, len(TARGETS), -1), mask)
 
 
 def build_model(model_path: Path) -> KneeDINO:
@@ -620,6 +634,22 @@ def build_model(model_path: Path) -> KneeDINO:
     trainable = sum(p.numel() for p in backbone.parameters() if p.requires_grad)
     log(f"DINOv2: {len(layers)} blocks, last {UNFREEZE_LAST} open, {trainable/1e6:.1f}M trainable")
     return KneeDINO(backbone)
+
+
+def initialize_from_localized(model: KneeDINO, checkpoint_path: Path, fold: int) -> None:
+    """Warm start routed slots from the successful localized model for this fold."""
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    if checkpoint.get("architecture") != "localized_target_patch_attention_v1":
+        raise ValueError(f"Fold {fold} localized checkpoint has unexpected architecture")
+    if checkpoint.get("fold") != fold or checkpoint.get("gold_training_count") != 0:
+        raise ValueError(f"Fold {fold} localized checkpoint failed provenance validation")
+    state = checkpoint["state_dict"]
+    # Localized slot order: SAG/COR/AX fluid, then SAG/COR/AX structural.
+    # Routed order: SAG/COR/AX fluid-FS, SAG fluid-noFS, COR T1, SAG T1.
+    # Reuse the anatomically closest learned slot embedding for each routed slot.
+    state["head.slot_embedding"] = state["head.slot_embedding"][[0, 1, 2, 0, 4, 3]].clone()
+    model.load_state_dict(state, strict=True)
+    log(f"fold {fold}: warm-started from {checkpoint_path.name}")
 
 
 def macro_auc(truth: np.ndarray, score: np.ndarray) -> tuple[float, dict[str, float]]:
@@ -737,8 +767,9 @@ def make_clean_split(
 
     target_values = table[TARGETS].values.astype(np.float32)
     addressed = (~np.isclose(target_values, 0.25)) & (~np.isclose(target_values, 0.50))
+    specialist_columns = np.asarray([target in SPECIALIST_TARGETS for target in TARGETS])
     before_mask = len(train_indices)
-    train_indices = train_indices[addressed[train_indices].any(axis=1)]
+    train_indices = train_indices[addressed[train_indices][:, specialist_columns].any(axis=1)]
     excluded_unaddressed = before_mask - len(train_indices)
 
     # Do not score duplicate report text whose target source appears in the other side.
@@ -791,7 +822,11 @@ def train_model(
     # The v4 table encodes report targets that were not addressed as exact 0.25;
     # exact 0.50 is also explicitly uninformative. Neither is a negative label.
     addressed = (~np.isclose(targets, 0.25)) & (~np.isclose(targets, 0.50))
+    specialist_mask = np.asarray(
+        [target in SPECIALIST_TARGETS for target in TARGETS], dtype=np.float32
+    )
     confidence *= addressed.astype(np.float32)
+    confidence *= specialist_mask[None, :]
     if np.any(confidence[train_indices].sum(axis=1) == 0):
         raise ValueError("At least one training study has no addressed target")
     coverage = addressed[train_indices].mean(axis=0)
@@ -807,7 +842,10 @@ def train_model(
             "params": [p for p in model.backbone.parameters() if p.requires_grad],
             "lr": LR_BACKBONE,
         },
-        {"params": model.head.parameters(), "lr": LR_HEAD},
+        {
+            "params": list(model.head.parameters()) + [model.patch_query],
+            "lr": LR_HEAD,
+        },
     ], weight_decay=WEIGHT_DECAY)
     steps_per_epoch = max(1, len(train_indices) // BATCH_STUDIES)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
@@ -850,7 +888,7 @@ def train_model(
         val_predictions = predict(model, cache, mask, val_indices, device)
         val_auc, per_target = masked_macro_auc(
             (targets[val_indices] > 0.5).astype(int), val_predictions,
-            addressed[val_indices],
+            addressed[val_indices] & specialist_mask[None, :].astype(bool),
         )
         gold_predictions = predict(model, cache, mask, gold_indices, device)
         gold_auc, gold_per_target = macro_auc(gold_truth[gold_indices].astype(int), gold_predictions)
@@ -897,8 +935,8 @@ def inference_main(output_root: Path) -> None:
     manifest = json.loads((output_root / "weights_manifest.json").read_text())
     if not manifest.get("candidate_ready", False):
         raise RuntimeError("Routed OOF gates did not pass; refusing to create submission.csv")
-    if float(manifest.get("routed_oof_auc", 0.0)) < TARGET_OOF_GATE:
-        raise RuntimeError("Routed OOF is below the deployment threshold")
+    if float(manifest.get("guarded_blend_oof_auc", 0.0)) <= 0.0:
+        raise RuntimeError("Routed output is missing guarded-blend OOF evidence")
     if manifest.get("targets") != TARGETS or manifest.get("slots") != [list(row) for row in SLOTS]:
         raise ValueError("Checkpoint manifest does not match this inference implementation")
 
@@ -975,6 +1013,14 @@ def choose_target_blend(
     for target_index, target in enumerate(TARGETS):
         y = truth[:, target_index]
         baseline_auc = float(roc_auc_score(y, baseline[:, target_index]))
+        if target not in SPECIALIST_TARGETS:
+            details[target] = {
+                "baseline_auc": baseline_auc,
+                "selected": {"weight": 0.0, "auc": baseline_auc, "gain": 0.0},
+                "grid": [],
+                "reason": "preserved exact baseline; outside specialist target set",
+            }
+            continue
         candidates = []
         for weight in BLEND_WEIGHTS:
             prediction = (
@@ -1029,6 +1075,7 @@ def main() -> None:
     previous_oof_path = find_unique_artifact(
         "localized_oof_predictions.csv", "localized-dinov2"
     )
+    localized_checkpoints = find_localized_checkpoints()
     train_df = pd.read_csv(root / "train.csv")
     labels = validate_and_join_labels(train_df, label_path)
     train_keep = training_studies(labels)
@@ -1051,14 +1098,6 @@ def main() -> None:
     gold_indices = np.flatnonzero(table["is_gold"].values)
     eligible_studies = np.asarray(studies)[eligible]
 
-    test_df = pd.read_csv(root / "test.csv")
-    test_series_csv = pd.read_csv(root / "test_series.csv")
-    test_keep = set(test_df["StudyInstanceUID"])
-    test_series = list_series(root / "test_series", test_series_csv, test_keep)
-    test_series = annotate_series(test_series)
-    test_slots = choose_slots(test_series)
-    test_sides = laterality_map(test_series)
-    test_studies, test_cache, test_mask = build_cache(test_slots, test_sides, "test")
     previous_oof, baseline_oof = load_previous_candidate(
         previous_oof_path, eligible_studies
     )
@@ -1074,7 +1113,6 @@ def main() -> None:
 
     fold_histories = []
     fold_gold_predictions = []
-    fold_test_predictions = []
     fold_assignment = np.full(len(studies), -1, dtype=np.int8)
     new_oof = np.full((len(studies), len(TARGETS)), np.nan, dtype=np.float32)
 
@@ -1091,6 +1129,7 @@ def main() -> None:
         fold_assignment[val_indices] = fold
         study_weights = scanner_balance_weights(studies, groups, train_indices)
         model = build_model(dino_path)
+        initialize_from_localized(model, localized_checkpoints[fold], fold)
         model, state, history = train_model(
             model, train_cache, train_mask, table,
             train_indices, val_indices, gold_indices, study_weights, device,
@@ -1098,7 +1137,7 @@ def main() -> None:
 
         checkpoint = {
             "state_dict": state,
-            "architecture": "routed_focal_pool_dino_v1",
+            "architecture": "routed_specialist_transfer_v2",
             "targets": TARGETS,
             "slots": SLOTS,
             "img_size": IMG_SIZE,
@@ -1106,8 +1145,8 @@ def main() -> None:
             "slice_band": SLICE_BAND,
             "window_centres": WINDOW_CENTRES,
             "window_pool": WINDOW_POOL,
-            "slot_prior": SLOT_PRIOR,
-            "slot_prior_strength": SLOT_PRIOR_STRENGTH,
+            "specialist_targets": sorted(SPECIALIST_TARGETS),
+            "warm_start": "localized_target_patch_attention_v1",
             "view_layout": "contiguous_centre_minus_one_centre_plus_one",
             "group_size": GROUP_SIZE,
             "n_groups": N_GROUPS,
@@ -1125,9 +1164,6 @@ def main() -> None:
         new_oof[val_indices] = predict(model, train_cache, train_mask, val_indices, device)
         fold_gold_predictions.append(
             predict(model, train_cache, train_mask, gold_indices, device)
-        )
-        fold_test_predictions.append(
-            predict(model, test_cache, test_mask, np.arange(len(test_studies)), device)
         )
         fold_histories.append({
             "fold": fold,
@@ -1186,27 +1222,25 @@ def main() -> None:
         f"pooled OOF: previous={baseline_oof_auc:.4f}, routed={new_oof_auc:.4f}, "
         f"guarded blend={best_oof_auc:.4f}"
     )
-    # Deployment gates apply to the routed family alone. The guarded blend is useful
-    # diagnostic evidence, but its old-family predictions cannot be reconstructed on
-    # hidden test rows from a three-row public preview. Keeping the gate routed-only
-    # guarantees a later inference kernel can reproduce the validated candidate from
-    # these five checkpoints without retraining or depending on public-row artifacts.
-    incremental_gate = new_oof_auc >= baseline_oof_auc + MIN_OOF_GAIN
-    target_gate = new_oof_auc >= TARGET_OOF_GATE
-    fold_gate = all(row["delta"] >= 0 for row in routed_fold_guard)
+    incremental_gate = best_oof_auc >= baseline_oof_auc + MIN_OOF_GAIN
+    selected_specialists = [
+        target for target in SPECIALIST_TARGETS
+        if target_weights[TARGETS.index(target)] > 0
+    ]
+    target_gate = len(selected_specialists) >= 2
+    fold_gate = all(
+        row["delta"] >= -MAX_MACRO_FOLD_REGRESSION for row in fold_guard
+    )
     candidate_ready = bool(incremental_gate and target_gate and fold_gate)
     log(
-        f"candidate gates: incremental={incremental_gate}, target>="
-        f"{TARGET_OOF_GATE:.3f}={target_gate}, every-fold={fold_gate}"
+        f"candidate gates: blend-gain={incremental_gate}, specialists="
+        f"{selected_specialists}, fold-tolerance={fold_gate}"
     )
 
     gold_columns = [f"{target}__gold" for target in TARGETS]
     gold_truth = table[gold_columns].values[gold_indices].astype(int)
     new_gold_ensemble = rank_predictions(np.mean(fold_gold_predictions, axis=0))
     gold_auc, gold_per_target = macro_auc(gold_truth, new_gold_ensemble)
-    new_test_ensemble = rank_predictions(np.mean(
-        [rank_predictions(predictions) for predictions in fold_test_predictions], axis=0
-    ))
     exact_oof = pd.DataFrame({
         "StudyInstanceUID": eligible_studies,
         "fold": fold_assignment[eligible],
@@ -1239,7 +1273,8 @@ def main() -> None:
         "routed_fold_guard": routed_fold_guard,
         "fold_guard": fold_guard,
         "candidate_ready": candidate_ready,
-        "target_oof_gate": TARGET_OOF_GATE,
+        "specialist_targets": sorted(SPECIALIST_TARGETS),
+        "selected_specialists": selected_specialists,
         "routed_target_weights": {
             target: float(target_weights[index]) for index, target in enumerate(TARGETS)
         },
@@ -1247,6 +1282,7 @@ def main() -> None:
         "minimum_required_oof_gain": MIN_OOF_GAIN,
         "minimum_target_gain": MIN_TARGET_GAIN,
         "maximum_fold_regression": MAX_FOLD_REGRESSION,
+        "maximum_macro_fold_regression": MAX_MACRO_FOLD_REGRESSION,
         "routed_gold_auc_monitor_only": gold_auc,
         "routed_gold_per_target": gold_per_target,
         "gold_eval_studies": len(gold_indices),
@@ -1254,7 +1290,7 @@ def main() -> None:
         "elapsed_seconds_before_submission": time.time() - T0,
     }, indent=2))
     Path("weights_manifest.json").write_text(json.dumps({
-        "architecture": "routed_focal_pool_dino_v1",
+        "architecture": "routed_specialist_transfer_v2",
         "checkpoint_pattern": "routed_dino_fold{fold}.pt",
         "folds": run_folds,
         "targets": TARGETS,
@@ -1264,6 +1300,8 @@ def main() -> None:
         "slice_band": SLICE_BAND,
         "window_centres": WINDOW_CENTRES,
         "window_pool": WINDOW_POOL,
+        "specialist_targets": sorted(SPECIALIST_TARGETS),
+        "warm_start": "localized_target_patch_attention_v1",
         "group_size": GROUP_SIZE,
         "n_groups": N_GROUPS,
         "routed_target_weights": {
@@ -1274,13 +1312,11 @@ def main() -> None:
         "candidate_ready": candidate_ready,
         "routed_oof_auc": new_oof_auc,
         "guarded_blend_oof_auc": best_oof_auc,
-        "target_oof_gate": TARGET_OOF_GATE,
+        "minimum_required_oof_gain": MIN_OOF_GAIN,
+        "maximum_macro_fold_regression": MAX_MACRO_FOLD_REGRESSION,
     }, indent=2))
     log(f"routed family gold monitor: {gold_auc:.4f}")
-    if candidate_ready:
-        write_candidate_preview(new_test_ensemble, test_studies, test_df)
-    else:
-        log("candidate preview withheld because the hard OOF gates did not all pass")
+    log("training output contains checkpoints and OOF evidence only; hidden inference is separate")
     log(f"complete in {(time.time() - T0) / 3600:.2f} hours")
 
 

@@ -21,8 +21,8 @@ validation, six acquisition slots, and a DINOv2-Small attention-MIL classifier.
   DINO patch attention, guarded against the exact scored 0.871 OOF ensemble
 - `kaggle/sequence_diagnostics/`: read-only DICOM-header audit of sequence contrast
   routing and study-wide versus single-series laterality normalization
-- `kaggle/routed_dino_train/`: sequence-specific DINO training with three contiguous
-  windows per slot, unaddressed-label masking, focal patch pooling, and a 0.849 OOF gate
+- `kaggle/routed_dino_train/`: sequence-specific specialist transfer with three
+  contiguous windows, unaddressed-label masking, and guarded target-wise OOF blending
 - `Kimi_Agent_RSNA Knee Detection Papers/`: research dossier and supporting analysis
 - `EXECUTION_PLAN.md`: phased implementation and validation plan
 - `AGENTS.md`: pinned environment facts, competition constraints, and safety rules
@@ -63,14 +63,14 @@ The routed experiment acts on the header audit rather than the public structural
 it separates fat-suppressed fluid, non-fat-suppressed fluid, and T1 acquisitions. It
 uses nine physically ordered slices per available slot at 280 pixels, masks exact 0.25
 and 0.50 report-label cells from the loss, and pools local findings over three windows.
-The training kernel emits immutable fold checkpoints, exact OOF predictions, and an
-inference manifest. Its deployment gate is deliberately routed-only, so the later
-hidden-test scorer can reproduce it from those checkpoints without retraining or
-depending on a three-row public preview. It withholds even that visible-test preview
-unless routed macro OOF reaches 0.849, improves the previous candidate by 0.002, and
-does not regress any scanner fold. The same script automatically switches to
-inference-only mode when an approved routed output is attached; `scorer-metadata.json`
-defines that submission kernel and refuses to write `submission.csv` for a failed gate.
+After routed v1 showed complementary OOF value only for ACL, contusion, and fracture,
+the corrected experiment warm-starts every fold from the successful localized family
+and fine-tunes those three targets only. The other nine targets remain the exact prior
+blend. The training kernel emits immutable checkpoints, paired OOF predictions, and an
+inference manifest only when the guarded blend gains at least 0.002 macro AUC, selects
+at least two specialist targets, and stays within a 0.002 scanner-fold tolerance.
+`scorer-metadata.json` defines the separate inference-only submission kernel and
+refuses to write `submission.csv` for a failed gate.
 
 ## License
 
