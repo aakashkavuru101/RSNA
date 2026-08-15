@@ -94,7 +94,7 @@ def unique_json(marker: str, filename: str) -> tuple[Path, dict]:
     return hits[0], json.loads(hits[0].read_text())
 
 
-def _header_probe(record: dict) -> dict:
+def _series_header_probe(record: dict) -> dict:
     result = {
         "StudyInstanceUID": record["StudyInstanceUID"],
         "SeriesInstanceUID": record["SeriesInstanceUID"],
@@ -121,7 +121,7 @@ def _header_probe(record: dict) -> dict:
 def annotate_series(series: pd.DataFrame) -> pd.DataFrame:
     records = series.to_dict("records")
     with ThreadPoolExecutor(max_workers=HEADER_THREADS) as pool:
-        headers = pd.DataFrame(pool.map(_header_probe, records))
+        headers = pd.DataFrame(pool.map(_series_header_probe, records))
     result = series.merge(
         headers, on=["StudyInstanceUID", "SeriesInstanceUID"], how="left",
         validate="one_to_one",
@@ -170,7 +170,7 @@ def choose_routed_slots(series: pd.DataFrame) -> dict[str, list[dict | None]]:
     return output
 
 
-def _numbers(value, n: int) -> np.ndarray | None:
+def _series_numbers(value, n: int) -> np.ndarray | None:
     if not isinstance(value, str):
         return None
     try:
@@ -190,9 +190,9 @@ def robust_laterality(headers: pd.DataFrame) -> dict[str, str | None]:
                 side for side in [str(value).strip().upper()[:1] for value in values if value]
                 if side in ("L", "R")
             )
-            ipp = _numbers(getattr(row, "ImagePositionPatient", None), 3)
-            iop = _numbers(getattr(row, "ImageOrientationPatient", None), 6)
-            spacing = _numbers(getattr(row, "PixelSpacing", None), 2)
+            ipp = _series_numbers(getattr(row, "ImagePositionPatient", None), 3)
+            iop = _series_numbers(getattr(row, "ImageOrientationPatient", None), 6)
+            spacing = _series_numbers(getattr(row, "PixelSpacing", None), 2)
             try:
                 rows, cols = float(getattr(row, "Rows")), float(getattr(row, "Columns"))
                 centre = ipp[:3] + iop[:3] * spacing[1] * cols / 2 + iop[3:6] * spacing[0] * rows / 2
