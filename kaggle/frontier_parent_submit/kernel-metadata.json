@@ -1,0 +1,24 @@
+{
+  "id": "aakashkavuru/rsna-knee-frontier-parent-clean",
+  "title": "RSNA Knee Frontier Parent Clean",
+  "code_file": "frontier_parent_submit.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "false",
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [
+    "mattiaangeli/knee-mri-fold-weights/2",
+    "pilkwang/rsna-knee-weights/1",
+    "tonylica/rsna2026-models/1"
+  ],
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "model_sources": [
+    "metaresearch/dinov2/PyTorch/small/1",
+    "metaresearch/dinov2/PyTorch/base/1"
+  ]
+}
