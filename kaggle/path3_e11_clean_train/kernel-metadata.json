@@ -1,0 +1,34 @@
+{
+  "id": "aakashkavuru/rsna-knee-path3-e11-clean-train",
+  "title": "RSNA Knee Path3 E11 Clean Train",
+  "code_file": "rsna_knee_path3_e11_clean_train.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "false",
+  "keywords": [
+    "gpu"
+  ],
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [
+    "marwanmath/resnet-50-radimagenet-marwan/versions/1",
+    "antoinegg1/rsna-knee-e9-radimagenet-heads-v15/versions/3",
+    "stevenleehans/rsna-knee-llm-report-labels/versions/6",
+    "lixin73/rsna-knee-llm-report-labels-sol56/versions/1",
+    "pilkwang/rsna-knee-llm-labels/versions/1",
+    "mattiaangeli/rsna-knee-radimagenet-foldsv1-heads/versions/1",
+    "pilkwang/rsna-knee-weights/versions/1",
+    "tonylica/rsna2026-models/versions/2",
+    "mattiaangeli/knee-mri-fold-weights/versions/2"
+  ],
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "model_sources": [
+    "metaresearch/dinov2/PyTorch/small/1",
+    "metaresearch/dinov2/PyTorch/base/1"
+  ],
+  "docker_image": "gcr.io/kaggle-private-byod/python@sha256:37c64f7dd9c54116ecd1bcc88817c5469b88387388fade02bfa8bf3fc647d461"
+}

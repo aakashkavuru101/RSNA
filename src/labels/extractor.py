@@ -17,7 +17,7 @@ import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -51,18 +51,18 @@ LABELS = [
 
 # Official positivity thresholds from the annotation protocol
 POSITIVITY_THRESHOLDS = {
-    "ACL": "Complete discontinuity or >50% of fibers disrupted",
-    "MCL": "Borderline graded negative",
-    "Medial Meniscus": "Abnormal signal contacting articular surface on >=2 images",
-    "Lateral Meniscus": "Abnormal signal contacting articular surface on >=2 images",
-    "Medial OA": ">=1 cm of high-grade cartilage loss in medial compartment",
-    "Lateral OA": ">=1 cm of high-grade cartilage loss in lateral compartment",
-    "PF OA": ">=1 cm of high-grade cartilage loss in patellofemoral compartment",
-    "Effusion": "Borderline graded negative",
-    "Synovitis": "Borderline graded negative",
-    "Baker's": "Borderline graded negative",
-    "Contusion": "Borderline graded negative",
-    "Fracture": "Borderline graded negative",
+    "ACL": "High-grade partial tear (>50% of fibers) or complete tear",
+    "MCL": "High-grade acute tear (grade II-III); grade I sprain is negative",
+    "Medial Meniscus": "Signal contacting an articular surface on >=2 images, or definite morphologic deformity/root or displaced tear",
+    "Lateral Meniscus": "Signal contacting an articular surface on >=2 images, or definite morphologic deformity/root or displaced tear",
+    "Medial OA": ">=1 cm of >50%-thickness cartilage loss in the medial compartment",
+    "Lateral OA": ">=1 cm of >50%-thickness cartilage loss in the lateral compartment",
+    "PF OA": ">=1 cm of >50%-thickness cartilage loss in the patellofemoral compartment",
+    "Effusion": "Moderate or large effusion; trace/small fluid is negative",
+    "Synovitis": "Definite synovial thickening/proliferation; isolated effusion or Hoffa signal is not sufficient",
+    "Baker's": "Moderate or large Baker/popliteal cyst; small physiologic bursal fluid is negative",
+    "Contusion": "Definite geographic traumatic marrow edema without a fracture line or cortical deformity",
+    "Fracture": "Definite fracture line, cortical breach, impaction, or subchondral/insufficiency fracture",
 }
 
 
@@ -134,6 +134,11 @@ def build_soft_extraction_prompt(report_text: str, language: str = "unknown") ->
 
 Your goal is to estimate, from the REPORT ONLY, how likely an independent expert image review would mark each finding positive under the competition rubric. Reports can under-call or over-call the image findings. Preserve severity as a continuous score so normal, mild, borderline, and definite disease are not tied.
 
+First identify the report language and interpret negation, uncertainty, severity,
+anatomical compartment, and chronic versus acute wording in that language. Do not
+translate medial/lateral into the patient's left/right side: they are anatomical
+compartments within the imaged knee.
+
 Report language: {language}
 Report text:
 ---
@@ -159,10 +164,13 @@ Label-specific ranking rules:
 - OA: distinguish intact cartilage (near 0), mild thinning/grade I-II/incipient OA (low but nonzero), high-grade or full-thickness loss without enough size detail (intermediate-high), and >=1 cm high-grade loss (near 1). Consider joint-space narrowing and osteophytes as supporting evidence, but do not call them definitive alone.
 - Effusion: no fluid (near 0), trace/small/mild fluid (low), moderate fluid (intermediate-high), large/marked fluid (near 1).
 - Synovitis: explicit synovial thickening/proliferation/inflammation drives the score. When synovitis is not addressed, moderate/large effusion or advanced OA may raise the score modestly; absence of effusion lowers it. Do not label every effusion as definite synovitis.
-- Meniscus: degeneration or intrasubstance signal not reaching a surface is low; a surface-reaching tear on adequate evidence is high.
+- Baker's: a small popliteal/Baker cyst is below threshold; moderate, large, dissecting, or ruptured cyst is high. Do not confuse other posterior cysts with a Baker cyst.
+- Meniscus: degeneration or intrasubstance signal not reaching a surface is low; a surface-reaching tear on adequate evidence, root tear, displaced fragment, ghost/truncation, or definite morphologic tear is high.
 - ACL: sprain/low-grade partial injury is below the >50% disruption threshold; high-grade partial or complete rupture is high.
+- MCL: periligamentous edema or grade-I sprain with intact fibers is low; grade-II partial disruption or grade-III discontinuity is high.
 - Contusion: marrow edema explicitly attributed to degeneration, OA, fracture, or another non-traumatic cause is not automatically a bone contusion.
 - Fracture: marrow edema alone is not a fracture; an explicit fracture line, impaction, insufficiency, or subchondral fracture is high.
+- Not addressed: use a near-neutral score unless a label-specific correlated finding above provides real evidence. Do not turn report silence into a confident negative except when the report explicitly gives a normal survey of that structure.
 
 Output ONLY strict JSON with exactly these 12 keys and no commentary:
 {{
@@ -179,6 +187,74 @@ Output ONLY strict JSON with exactly these 12 keys and no commentary:
   "Contusion": {{"value": "...", "score": 0.0, "evidence": "..."}},
   "Fracture": {{"value": "...", "score": 0.0, "evidence": "..."}}
 }}"""
+
+
+def build_soft_batch_extraction_prompt(
+    reports: Sequence[Tuple[str, str]],
+) -> str:
+    """Build one rubric-locked request for several independent reports.
+
+    Short request-local identifiers reduce tokens and prevent a model from
+    rewriting StudyInstanceUID values. The caller owns the UID mapping.
+    """
+    if not reports:
+        raise ValueError("at least one report is required")
+    identifiers = [str(identifier) for identifier, _ in reports]
+    if len(identifiers) != len(set(identifiers)):
+        raise ValueError("batch report identifiers must be unique")
+
+    thresholds_text = "\n".join(
+        f"- {label}: {threshold}" for label, threshold in POSITIVITY_THRESHOLDS.items()
+    )
+    report_blocks = "\n\n".join(
+        f"<REPORT id={json.dumps(identifier)}>\n{text}\n</REPORT>"
+        for identifier, text in reports
+    )
+    finding_template = ",\n".join(
+        f'      {json.dumps(label)}: '
+        '{"value": "...", "score": 0.0, "evidence": "..."}'
+        for label in LABELS
+    )
+
+    return f"""You are a musculoskeletal radiology expert creating independent soft training targets for knee MRI reports.
+
+Evaluate every report separately. Never transfer a finding between reports. Interpret each report in its original language, including negation, uncertainty, severity, anatomical compartment, and acute versus chronic wording. Medial/lateral are anatomical compartments, not patient left/right.
+
+Official positivity thresholds (borderline is negative):
+{thresholds_text}
+
+Scoring anchors:
+- 0.00-0.10: explicitly normal or absent
+- 0.15-0.35: mild, minimal, grade I, intrasubstance degeneration, or below threshold
+- 0.40-0.60: uncertain, not addressed, or incompletely characterized
+- 0.65-0.85: likely positive or high-grade without complete size detail
+- 0.90-1.00: definite and clearly meets the threshold
+
+Critical rules:
+- Meniscus grade 1-2 signal without articular-surface contact is below threshold. Root tear, displaced fragment, definite deformity, or surface contact on at least two images is positive.
+- ACL low-grade sprain/partial injury is below threshold; greater than 50 percent disruption or complete rupture is positive.
+- MCL grade I/periligamentous edema with intact fibers is below threshold; grade II-III acute disruption is positive.
+- OA needs at least 1 cm of greater than 50 percent cartilage loss. Mild thinning, isolated marrow edema, or an equivocal osteophyte is below threshold.
+- Trace/small effusion and small Baker cyst are below threshold. Moderate/large is positive.
+- Synovitis needs definite synovial thickening/proliferation. Effusion or Hoffa signal alone is insufficient.
+- Contusion is geographic traumatic marrow edema without a fracture line or cortical deformity. Degenerative marrow edema is not a contusion.
+- Fracture requires a line, cortical breach, impaction, or explicit subchondral/insufficiency fracture. Marrow edema alone is insufficient.
+- If a finding is not discussed and no correlated finding supplies real evidence, use value "not_addressed" and a near-neutral score.
+- Evidence must be an exact short quote from that report, or an empty string when not addressed.
+
+Reports:
+{report_blocks}
+
+Return ONLY strict JSON in this exact outer shape, with every requested id once and all 12 finding keys:
+{{
+  "reports": {{
+    {json.dumps(identifiers[0])}: {{
+{finding_template}
+    }}
+  }}
+}}
+
+Allowed values are "present", "absent", "uncertain", "not_addressed", and "laterality_ambiguous". Scores must be finite numbers from 0 to 1. Do not add commentary or markdown fences."""
 
 
 class LabelExtractor:

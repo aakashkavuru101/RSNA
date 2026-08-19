@@ -1,0 +1,26 @@
+{
+  "id": "aakashkavuru/rsna-knee-path4-knowledge-transformer-train",
+  "title": "RSNA Knee Path4 Knowledge Transformer Train",
+  "code_file": "path4_knowledge_transformer_train.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "false",
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [
+    "stevenleehans/rsna-knee-llm-report-labels",
+    "pilkwang/rsna-knee-weights"
+  ],
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "kernel_sources": [
+    "aakashkavuru/rsna-knee-localized-dinov2"
+  ],
+  "model_sources": [
+    "metaresearch/dinov2/PyTorch/small/1"
+  ],
+  "docker_image": "gcr.io/kaggle-private-byod/python@sha256:37c64f7dd9c54116ecd1bcc88817c5469b88387388fade02bfa8bf3fc647d461"
+}
