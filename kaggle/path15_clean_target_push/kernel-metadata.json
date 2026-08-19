@@ -1,0 +1,24 @@
+{
+  "id": "aakashkavuru/rsna-knee-path15-clean-target-push",
+  "title": "RSNA Knee Path15 Clean Target Push",
+  "code_file": "path15_clean_target_push.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "false",
+  "enable_tpu": "false",
+  "enable_internet": "false",
+  "keywords": [
+    "cpu"
+  ],
+  "dataset_sources": [],
+  "kernel_sources": [
+    "aakashkavuru/rsna-knee-path10-kimi-fs160-stack-apply",
+    "aakashkavuru/rsna-knee-path11-kimi-fs160-replace-apply"
+  ],
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "model_sources": [],
+  "docker_image": "gcr.io/kaggle-private-byod/python@sha256:37c64f7dd9c54116ecd1bcc88817c5469b88387388fade02bfa8bf3fc647d461"
+}
