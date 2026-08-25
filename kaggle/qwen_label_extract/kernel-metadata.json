@@ -1,0 +1,18 @@
+{
+  "id": "aakashkavuru/rsna-knee-qwen-label-extract",
+  "title": "RSNA Knee Qwen Label Extract",
+  "code_file": "qwen_label_extract.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "true",
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [
+    "aakashkavuru/rsna-knee-train-reports"
+  ],
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ]
+}

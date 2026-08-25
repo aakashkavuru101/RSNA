@@ -28,8 +28,16 @@
 ## Do-Not-Touch Paths
 
 - `/kaggle/input/rsna-knee-abnormality-detection/` — raw competition data (read-only)
-- `input/gold_labels.csv` — 58 gold studies; NEVER used for training
+- `input/gold_labels.csv` — 58 gold studies. May be used for training/selection ONLY under the cross-fit protocol in `GOLD_INTEGRATION_PLAN.md` §2: never evaluate a candidate on gold folds it trained on; every artifact records `gold_usage: none | crossfit | full`. The file itself is read-only.
+- `input/gold_folds.csv` — immutable 5-fold split of the 58 gold studies; NEVER regenerate once created
 - `models/*/oof/` — OOF prediction artifacts; NEVER overwrite
+- `input/silver_labels_v4.csv` + `input/silver_labels_v4_fusion_audit.json` — fused silver labels from `notebooks/08_label_fusion.py`; regenerate only via that script with `--force`; the audit records the per-label source map and `gold_usage`
+- `input/extraction_soft_v3_qwen_*` / `input/silver_labels_soft_v3_qwen_*.csv` — open-weight (Qwen) extraction namespace; one pinned model per namespace, same contract as other `extraction_soft_v3_<slug>_*` artifacts
+
+## Experimental Line (2026-08-20): labels + gold-at-backbone
+
+- `kaggle/qwen_label_extract/` — dev-time extraction kernel (open-weight Qwen via vLLM). **Internet ON is allowed here only** — it is label infrastructure, never produces `submission.csv`. Submission notebooks remain internet-off.
+- `kaggle/path20_gold_backbone_train/` — gold-weighted full-backbone fine-tuning under the GOLD_INTEGRATION_PLAN.md §2 cross-fit protocol. Checkpoint contract extension: `gold_training_count` records the true count (0 for gold-free, 46 for cross-fit folds, 58 for full-gold deployment); validators must accept these values instead of asserting 0.
 
 ## Offline Install Mechanism
 

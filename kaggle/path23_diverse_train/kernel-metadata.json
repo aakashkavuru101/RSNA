@@ -1,0 +1,21 @@
+{
+  "id": "aakashkavuru/rsna-knee-path23-diverse-train",
+  "title": "RSNA Knee Path23 Diverse Train",
+  "code_file": "path23_diverse_train.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "false",
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [
+    "aakashkavuru/rsna-knee-silver-labels-mv1"
+  ],
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "model_sources": [
+    "timm/tf-efficientnet/PyTorch/tf-efficientnet-b3/1"
+  ]
+}

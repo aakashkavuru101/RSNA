@@ -1,0 +1,33 @@
+{
+  "id": "aakashkavuru/rsna-knee-path17-gold-crossfit-train",
+  "title": "RSNA Knee Path17 Gold Crossfit Train",
+  "code_file": "rsna_knee_path17_gold_crossfit_train.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "false",
+  "keywords": ["gpu"],
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [
+    "marwanmath/resnet-50-radimagenet-marwan",
+    "antoinegg1/rsna-knee-e9-radimagenet-heads-v15",
+    "stevenleehans/rsna-knee-llm-report-labels",
+    "lixin73/rsna-knee-llm-report-labels-sol56",
+    "pilkwang/rsna-knee-llm-labels",
+    "mattiaangeli/rsna-knee-radimagenet-foldsv1-heads",
+    "pilkwang/rsna-knee-weights",
+    "tonylica/rsna2026-models",
+    "mattiaangeli/knee-mri-fold-weights"
+  ],
+  "kernel_sources": [
+    "aakashkavuru/rsna-knee-path5-supervision-fusion-train"
+  ],
+  "competition_sources": ["rsna-knee-abnormality-detection"],
+  "model_sources": [
+    "metaresearch/dinov2/PyTorch/small/1",
+    "metaresearch/dinov2/PyTorch/base/1"
+  ],
+  "docker_image": "gcr.io/kaggle-private-byod/python@sha256:37c64f7dd9c54116ecd1bcc88817c5469b88387388fade02bfa8bf3fc647d461"
+}
