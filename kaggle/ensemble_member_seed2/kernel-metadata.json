@@ -1,0 +1,21 @@
+{
+  "id": "aakashkavuru/rsna-knee-ensemble-member-seed2",
+  "title": "RSNA Knee Ensemble Member Seed2",
+  "code_file": "ensemble_member_seed2.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "false",
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [
+    "aakashkavuru/rsna-knee-silver-labels-v5"
+  ],
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "model_sources": [
+    "metaresearch/dinov2/PyTorch/base/1"
+  ]
+}

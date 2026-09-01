@@ -1,0 +1,18 @@
+{
+  "id": "aakashkavuru/rsna-knee-path31-raptorx-train",
+  "title": "RSNA Knee Path31 RaptorX Train",
+  "code_file": "path31_raptorx_train.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "true",
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [
+    "aakashkavuru/rsna-knee-silver-labels-v6"
+  ],
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ]
+}

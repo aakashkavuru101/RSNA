@@ -1,0 +1,22 @@
+{
+  "id": "aakashkavuru/rsna-knee-combined-ensemble-inference-v2",
+  "title": "RSNA Knee Combined Ensemble Inference V2",
+  "code_file": "combined_ensemble_inference.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "false",
+  "machine_shape": "NvidiaTeslaT4",
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "dataset_sources": [
+    "aakashkavuru/rsna-knee-ensemble-checkpoints",
+    "aakashkavuru/rsna-knee-ensemble-mm6-checkpoints"
+  ],
+  "model_sources": [
+    "metaresearch/dinov2/PyTorch/base/1"
+  ]
+}

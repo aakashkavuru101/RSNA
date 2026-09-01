@@ -1,0 +1,22 @@
+{
+  "id": "aakashkavuru/rsna-knee-multimodal-train",
+  "title": "RSNA Knee Multimodal Train",
+  "code_file": "multimodal_train.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "false",
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [
+    "aakashkavuru/rsna-knee-silver-labels-v6",
+    "aakashkavuru/rsna-knee-report-embeddings"
+  ],
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "model_sources": [
+    "metaresearch/dinov2/PyTorch/base/1"
+  ]
+}

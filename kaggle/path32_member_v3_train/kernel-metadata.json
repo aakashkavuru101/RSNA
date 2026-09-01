@@ -1,0 +1,21 @@
+{
+  "id": "aakashkavuru/rsna-knee-path32-member-v3-train",
+  "title": "RSNA Knee Path32 Member V3 Train",
+  "code_file": "path32_member_v3_train.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "false",
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [
+    "aakashkavuru/rsna-knee-silver-labels-v6"
+  ],
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "model_sources": [
+    "metaresearch/dinov2/PyTorch/base/1"
+  ]
+}

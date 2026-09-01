@@ -1,0 +1,21 @@
+{
+  "id": "aakashkavuru/rsna-knee-path24-decisive-override",
+  "title": "RSNA Knee Path24 Decisive Override",
+  "code_file": "path24_decisive_override.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "false",
+  "enable_tpu": "false",
+  "enable_internet": "false",
+  "keywords": [
+    "cpu"
+  ],
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "kernel_sources": [
+    "aakashkavuru/rsna-knee-path21-strong-alpha-apply",
+    "aakashkavuru/rsna-knee-combined-ensemble-inference-v2"
+  ]
+}

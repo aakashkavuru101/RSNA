@@ -1,0 +1,28 @@
+{
+  "id": "aakashkavuru/rsna-knee-path33-own-stack-submit",
+  "title": "RSNA Knee Path33 Own Stack Submit",
+  "code_file": "path33_own_stack_submit.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "false",
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [
+    "aakashkavuru/rsna-knee-silver-labels-v6"
+  ],
+  "kernel_sources": [
+    "aakashkavuru/rsna-knee-path27-member-fixed-train",
+    "aakashkavuru/rsna-knee-path29-member-small-train",
+    "aakashkavuru/rsna-knee-path32-member-v3-train",
+    "aakashkavuru/rsna-knee-path31-raptorx-train"
+  ],
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "model_sources": [
+    "metaresearch/dinov2/PyTorch/small/1",
+    "metaresearch/dinov2/PyTorch/base/1"
+  ]
+}
