@@ -1,0 +1,23 @@
+{
+  "id": "aakashkavuru/rsna-knee-path37-orthofoundation-specialist-train",
+  "title": "RSNA Knee Path37 OrthoFoundation Specialist Train",
+  "code_file": "path37_orthofoundation_specialist_train.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "false",
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [
+    "dreaddevelopment/knee-raptor-corpus",
+    "dreaddevelopment/knee-raptor-corpus-ext",
+    "stevenleehans/rsna-knee-llm-report-labels",
+    "pilkwang/rsna-knee-llm-labels",
+    "lixin73/rsna-knee-llm-report-labels-sol56",
+    "aakashkavuru/orthofoundation-knee-mri-vitl"
+  ],
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ]
+}

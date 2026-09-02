@@ -1,0 +1,21 @@
+{
+  "id": "aakashkavuru/rsna-knee-path39-mrnet-ortho-probe",
+  "title": "RSNA Knee Path39 MRNet Ortho Probe",
+  "code_file": "path39_mrnet_ortho_probe.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "false",
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [
+    "techtech69/mrnet-knee-mri-stanford-aimi",
+    "dreaddevelopment/knee-raptor-corpus",
+    "dreaddevelopment/knee-raptor-corpus-ext",
+    "aakashkavuru/orthofoundation-knee-mri-vitl"
+  ],
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ]
+}

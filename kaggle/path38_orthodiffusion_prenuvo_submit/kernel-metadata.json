@@ -1,0 +1,18 @@
+{
+  "id": "aakashkavuru/rsna-knee-path38-orthodiffusion-prenuvo",
+  "title": "RSNA Knee Path38 OrthoDiffusion Prenuvo",
+  "code_file": "path38_orthodiffusion_prenuvo_submit.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": false,
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [
+    "nasrinakbari/orthodiffusion-rsna-knee-prenuvo-v1"
+  ],
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ]
+}
